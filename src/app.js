@@ -461,8 +461,29 @@ function slider(key) {
   sliders[key] = { inp, fmt };
   return h('label', { class: 'row', title: 'Duplo clique para voltar ao padrão' }, h('span', { class: 'lbl' }, p.label), val, inp);
 }
+// ícones brancos das abas (traço simples, 24×24)
+const ICONS = {
+  'Movimento': '<circle cx="15" cy="12" r="5"/><path d="M2.5 9h5M1.5 12h6M2.5 15h5"/>',
+  'Câmera': '<rect x="2" y="7" width="13" height="10" rx="2"/><path d="M15 11l6-3v8l-6-3z"/>',
+  'Luz': '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  'Cores': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.9 1.2-1.8-.5-1 .2-2.2 1.3-2.2H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z"/><circle cx="7.5" cy="11.5" r="1.2" fill="currentColor"/><circle cx="10.5" cy="7.5" r="1.2" fill="currentColor"/><circle cx="15" cy="8" r="1.2" fill="currentColor"/>',
+  'Acabamento': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 13l10-10M3 21L21 3M11 21l10-10"/>',
+  'Vinheta': '<rect x="2" y="5" width="20" height="14" rx="2"/><ellipse cx="12" cy="12" rx="6" ry="4"/>',
+  'Imagem': '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>',
+  'Visualização': '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  'Render': '<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
+  'Ajustes': '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-0"/><circle cx="16" cy="6" r="2.2"/><circle cx="10" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
+};
+function iconFor(title) {
+  const key = Object.keys(ICONS).find((k) => title.startsWith(k));
+  if (!key) return null;
+  const span = document.createElement('span');
+  span.className = 'ico';
+  span.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[key]}</svg>`;
+  return span;
+}
 function panel(title, open, ...kids) {
-  const d = h('details', { class: 'panel' }, h('summary', {}, title), h('div', { class: 'body' }, ...kids));
+  const d = h('details', { class: 'panel' }, h('summary', {}, iconFor(title), h('span', {}, title)), h('div', { class: 'body' }, ...kids));
   if (open) d.open = true;
   return d;
 }

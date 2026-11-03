@@ -47,8 +47,10 @@
     #rack { height: calc(100vh - 53px); overflow: auto; columns: auto; }
   }
   .panel { break-inside: avoid; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; }
-  .panel > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; list-style: none; }
-  .panel > summary::before { content: '▸'; display: inline-block; width: 14px; color: var(--muted); transition: transform .15s; }
+  .panel > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; list-style: none; display: flex; align-items: center; gap: 8px; }
+  .panel > summary::-webkit-details-marker { display: none; }
+  .panel > summary .ico { display: inline-flex; color: #fff; }
+  .panel > summary::before { content: '▸'; display: inline-block; width: 10px; color: var(--muted); transition: transform .15s; }
   .panel[open] > summary::before { transform: rotate(90deg); }
   .panel .body { padding: 2px 12px 12px; }
   .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; margin: 7px 0; }
