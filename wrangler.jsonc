@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // App estático: o Cloudflare só entrega os arquivos; prévia e render rodam na GPU de quem abre.
+  "name": "motion3d",
+  "compatibility_date": "2026-11-03",
+  "assets": {
+    "directory": "./",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    { "pattern": "motion3d.thefuturestudiostools.app", "custom_domain": true }
+  ],
+  "workers_dev": true
+}

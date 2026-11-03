@@ -21,7 +21,7 @@ export const params = {
   anel: { label: 'Voltas do anel', min: 0, max: 4, step: 1, value: 1, group: 'motion', unit: '×' },
   orbita: { label: 'Voltas das esferas', min: 0, max: 4, step: 1, value: 1, group: 'motion', unit: '×' },
 
-  duracao: { label: 'Duração do loop', min: 2, max: 16, step: 0.5, value: 4, group: 'camera', unit: 's' },
+  duracao: { label: 'Duração do clipe', min: 2, max: 40, step: 0.5, value: 4, group: 'camera', unit: 's' },
   arco: { label: 'Arco lateral', min: 0, max: 40, step: 0.5, value: 14, group: 'camera', unit: '°' },
   flutuar: { label: 'Flutuação (vivo)', min: 0, max: 2, step: 0.01, value: 1, group: 'camera' },
   roll: { label: 'Respiração (roll)', min: 0, max: 2, step: 0.05, value: 0.5, group: 'camera', unit: '°' },
@@ -281,9 +281,82 @@ export function createScene(renderer) {
     buildEnvironment(r);
   }
 
+  // ---------------------------------------------------------------- poses animadas (função pura de t)
+  function poses(t) {
+    const T = P.duracao.value, u = t / T, E = P.energia.value;
+    const by = 2.2 + 0.08 * E * Math.sin(TAU * u);
+    // pulo
+    const k = Math.round(P.pulos.value);
+    const p = (k * u) % 1;
+    const h = 1.15 * P.pulo.value * E * 4 * p * (1 - p);
+    const vel = Math.abs(1 - 2 * p);
+    const contactSq = Math.exp(-Math.pow(p / 0.045, 2)) + Math.exp(-Math.pow((1 - p) / 0.045, 2));
+    const sy = 1 + (0.16 * vel * vel * (1 - contactSq) - 0.17 * contactSq) * Math.min(1, E * P.pulo.value);
+    // cápsula
+    const dx = 0.38 * E * Math.sin(TAU * cycles(1, P) * u);
+    // cubo
+    const th = THREE.MathUtils.degToRad(9) * E * Math.sin(TAU * cycles(1, P) * u + 0.6);
+    const sgn = th >= 0 ? -1 : 1;
+    const ex = CUBE.x + sgn * cubeS / 2;
+    const cx = CUBE.x - ex, cy = cubeS / 2;
+    // vidro
+    const gy = 0.95 + 0.1 * E * Math.sin(TAU * cycles(1, P) * u + 1.9);
+    const orbP = [0, 1, 2].map((i) => {
+      const a = TAU * (P.orbita.value * u + i / 3);
+      return new THREE.Vector3(Math.cos(a) * 1.75, by + 0.22 * Math.sin(2 * a + i), Math.sin(a) * 1.75);
+    });
+    return {
+      u, by, h, sy,
+      blob: new THREE.Vector3(0, by, 0),
+      hop: new THREE.Vector3(HOP.x, hopR * sy + h, HOP.z),
+      cap: new THREE.Vector3(CAP.x + dx, CAP.y, CAP.z), dx,
+      cube: new THREE.Vector3(ex + cx * Math.cos(th) - cy * Math.sin(th), cx * Math.sin(th) + cy * Math.cos(th), CUBE.z), th,
+      glass: new THREE.Vector3(GLASS.x, gy, GLASS.z),
+      orbs: orbP,
+    };
+  }
+
+  // elementos que a câmera pode visitar / mirar (posição de repouso + posição animada)
+  const subjects = {
+    centro: { label: 'Centro da composição', rest: new THREE.Vector3(0.05, 1.2, 0), at: () => new THREE.Vector3(0.05, 1.2, 0), radius: 0 },
+    cromo: { label: 'Cromo líquido (com anel e órbitas)', rest: new THREE.Vector3(0, 2.2, 0), at: (t) => poses(t).blob, radius: 0.85 },
+    anel: { label: 'Anel dourado', rest: new THREE.Vector3(0, 2.2, 0), at: (t) => poses(t).blob, radius: 1.31 },
+    pedestal: { label: 'Pedestal', rest: new THREE.Vector3(0, 0.25, 0), at: () => new THREE.Vector3(0, 0.3, 0), radius: 1.05 },
+    esfera: { label: 'Esfera de cerâmica que pula', rest: new THREE.Vector3(HOP.x, 0.45, HOP.z), at: (t) => poses(t).hop, radius: 0.5 },
+    capsula: { label: 'Cápsula de bala que rola', rest: new THREE.Vector3(CAP.x, CAP.y, CAP.z), at: (t) => poses(t).cap, radius: 0.62 },
+    cubo: { label: 'Cubo de veludo', rest: new THREE.Vector3(CUBE.x, 0.4, CUBE.z), at: (t) => poses(t).cube, radius: 0.62 },
+    vidro: { label: 'Esfera de vidro fosco', rest: new THREE.Vector3(GLASS.x, 0.95, GLASS.z), at: (t) => poses(t).glass, radius: 0.55 },
+  };
+
+  // obstáculos com forma (para checar folga da câmera com as posições animadas)
+  const segDist = (p, a, b) => {
+    const ab = b.clone().sub(a), ap = p.clone().sub(a);
+    const f = Math.max(0, Math.min(1, ap.dot(ab) / (ab.lengthSq() || 1)));
+    return p.distanceTo(a.clone().addScaledVector(ab, f));
+  };
+  function obstacles(t) {
+    const o = poses(t);
+    const list = [
+      { name: 'chão', dist: (p) => p.y - 0.05 },
+      { name: 'pedestal', dist: (p) => {
+        const dx = Math.hypot(p.x, p.z) - 1.05, dy = Math.abs(p.y - 0.25) - 0.25;
+        return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);
+      } },
+      { name: 'cromo + anel', dist: (p) => p.distanceTo(o.blob) - 1.31 },
+      { name: 'esfera', dist: (p) => p.distanceTo(o.hop) - hopR * 1.2 },
+      { name: 'cápsula', dist: (p) => segDist(p, o.cap.clone().setZ(o.cap.z - 0.35), o.cap.clone().setZ(o.cap.z + 0.35)) - capR },
+      { name: 'cubo', dist: (p) => p.distanceTo(o.cube) - 0.69 },
+      { name: 'vidro', dist: (p) => p.distanceTo(o.glass) - glassR },
+    ];
+    o.orbs.forEach((q2, i) => list.push({ name: `esfera de acento ${i + 1}`, dist: (p) => p.distanceTo(q2) - 0.12 }));
+    return list;
+  }
+
   // ---------------------------------------------------------------- câmera
+  // modo "observador flutuante" (padrão) ou um movimento (rig) dirigido por prompt
+  let rig = null;
   const TARGET = new THREE.Vector3(0.05, 1.2, 0);
-  function cameraAt(t, out = {}) {
+  function observerAt(t) {
     const T = P.duracao.value, u = t / T;
     const az = THREE.MathUtils.degToRad(P.arco.value / 2) * Math.sin(TAU * u);
     const el = THREE.MathUtils.degToRad(P.altura.value);
@@ -297,16 +370,30 @@ export function createScene(renderer) {
     look.x += fl * 0.25 * Math.sin(TAU * 2 * u + 2.7);
     look.y += fl * 0.25 * Math.sin(TAU * 1 * u + 0.9);
     const roll = THREE.MathUtils.degToRad(P.roll.value) * Math.sin(TAU * 2 * u + 0.7);
-    out.pos = pos; out.look = look; out.roll = roll; out.dist = dist;
-    return out;
+    return { pos, look, roll, lens: P.lente.value, focus: pos.distanceTo(new THREE.Vector3(0, 2.2, 0)), dofMul: 1 };
   }
+  function cameraAt(t) {
+    if (!rig) return observerAt(t);
+    const f = rig.frame(t);
+    const T = P.duracao.value, u = t / T;
+    // flutuação viva bem leve por cima do movimento (só vertical: nada de balanço lateral num mergulho)
+    const fl = P.flutuar.value * 0.012;
+    f.pos.y += fl * Math.sin(TAU * 2 * u + 0.4);
+    f.look.y += fl * 0.5 * Math.sin(TAU * 2 * u + 0.4);
+    f.roll += THREE.MathUtils.degToRad(P.roll.value) * 0.3 * Math.sin(TAU * u + 0.7);
+    f.lens = f.lens || P.lente.value;
+    return f;
+  }
+  function setRig(r) { rig = r; }
+  function getRig() { return rig; }
 
   // ---------------------------------------------------------------- render(t)
   const tmp = new THREE.Vector3();
   const q = new THREE.Quaternion();
   const qTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.15, 0.3, 0));
   function update(t, aspect) {
-    const T = P.duracao.value, u = t / T, E = P.energia.value;
+    const T = P.duracao.value, u = t / T;
+    const o = poses(t);
 
     // luzes
     const kc = kelvinToRGB(P.temperatura.value);
@@ -326,8 +413,7 @@ export function createScene(renderer) {
     scene.environmentIntensity = P.env.value;
 
     // cromo
-    const by = 2.2 + 0.08 * E * Math.sin(TAU * u);
-    blob.position.set(0, by, 0);
+    blob.position.copy(o.blob);
     const pos = blob.geometry.attributes.position.array;
     const L = 0.085 * Math.min(P.liquido.value, 2);
     const wph = waves.map((w) => TAU * cycles(w.m, P) * u + w.ph);
@@ -346,57 +432,39 @@ export function createScene(renderer) {
     blob.geometry.computeBoundingSphere();
 
     // anel: gira em torno do próprio eixo inclinado + precessão lenta
-    ring.position.copy(blob.position);
+    ring.position.copy(o.blob);
     const ra = TAU * P.anel.value * u;
     q.setFromAxisAngle(tmp.set(0, 1, 0), ra);
     ring.quaternion.copy(q).multiply(qTilt);
     ring.rotateZ(ra * 1.0);
 
     // esferas de acento em órbita
-    orbs.forEach((o, i) => {
-      const a = TAU * (P.orbita.value * u + i / 3);
-      o.position.set(Math.cos(a) * 1.75, by + 0.22 * Math.sin(2 * a + i), Math.sin(a) * 1.75);
-    });
+    orbs.forEach((m, i) => m.position.copy(o.orbs[i]));
 
     // pulo com squash & stretch
-    const k = Math.round(P.pulos.value);
-    const p = (k * u) % 1;
-    const Hh = 1.15 * P.pulo.value * E;
-    const h = Hh * 4 * p * (1 - p);
-    const vel = Math.abs(1 - 2 * p);
-    const contactSq = Math.exp(-Math.pow(p / 0.045, 2)) + Math.exp(-Math.pow((1 - p) / 0.045, 2));
-    const sy = 1 + (0.16 * vel * vel * (1 - contactSq) - 0.17 * contactSq) * Math.min(1, E * P.pulo.value);
-    const sxz = 1 / Math.sqrt(sy);
-    hop.scale.set(sxz, sy, sxz);
-    hop.position.set(HOP.x, hopR * sy + h, HOP.z);
+    const sxz = 1 / Math.sqrt(o.sy);
+    hop.scale.set(sxz, o.sy, sxz);
+    hop.position.copy(o.hop);
     hopC.position.set(HOP.x, 0.003, HOP.z);
-    const hn = Math.min(1, h / 1.6);
+    const hn = Math.min(1, o.h / 1.6);
     hopC.scale.setScalar(1 - 0.45 * hn);
     hopC.material.opacity = P.contato.value * 0.85 * (1 - 0.75 * hn);
 
     // cápsula rolando (sem escorregar)
-    const kr = cycles(1, P);
-    const dx = 0.38 * E * Math.sin(TAU * kr * u);
-    capsule.position.set(CAP.x + dx, CAP.y, CAP.z);
-    capsule.rotation.set(0, 0, -dx / capR);
-    capC.position.set(CAP.x + dx, 0.003, CAP.z);
+    capsule.position.copy(o.cap);
+    capsule.rotation.set(0, 0, -o.dx / capR);
+    capC.position.set(o.cap.x, 0.003, CAP.z);
     capC.scale.set(1, 1, 0.9);
     capC.material.opacity = P.contato.value * 0.9;
 
     // cubo balançando sobre as arestas
-    const kc2 = cycles(1, P);
-    const th = THREE.MathUtils.degToRad(9) * E * Math.sin(TAU * kc2 * u + 0.6);
-    const sgn = th >= 0 ? -1 : 1;
-    const ex = CUBE.x + sgn * cubeS / 2;
-    const cx = CUBE.x - ex, cy = cubeS / 2;
-    cube.position.set(ex + cx * Math.cos(th) - cy * Math.sin(th), cx * Math.sin(th) + cy * Math.cos(th), CUBE.z);
-    cube.rotation.set(0, 0, th);
-    cubeC.position.set(cube.position.x, 0.003, CUBE.z);
+    cube.position.copy(o.cube);
+    cube.rotation.set(0, 0, o.th);
+    cubeC.position.set(o.cube.x, 0.003, CUBE.z);
     cubeC.material.opacity = P.contato.value * 0.8;
 
     // vidro flutuando
-    const gy = 0.95 + 0.1 * E * Math.sin(TAU * cycles(1, P) * u + 1.9);
-    glass.position.set(GLASS.x, gy, GLASS.z);
+    glass.position.copy(o.glass);
     glassC.position.set(GLASS.x, 0.003, GLASS.z);
     glassC.material.opacity = P.contato.value * 0.45;
 
@@ -404,17 +472,18 @@ export function createScene(renderer) {
 
     // câmera
     const cam = cameraAt(t);
-    camera.setFocalLength(P.lente.value);
+    camera.setFocalLength(cam.lens);
     camera.aspect = aspect;
     camera.position.copy(cam.pos);
     camera.up.set(0, 1, 0);
     camera.lookAt(cam.look);
     camera.rotateZ(cam.roll);
-    camera.near = Math.max(0.05, cam.dist * 0.05);
-    camera.far = cam.dist * 6 + 60;
+    const dist = cam.pos.distanceTo(cam.look);
+    camera.near = Math.max(0.03, Math.min(0.3, dist * 0.03));
+    camera.far = 200;
     camera.updateProjectionMatrix();
-    return { focus: camera.position.distanceTo(blob.position) };
+    return { focus: cam.focus || dist, dofMul: cam.dofMul == null ? 1 : cam.dofMul, lens: cam.lens };
   }
 
-  return { scene, camera, update, applyPalette, cameraAt, pedestal };
+  return { scene, camera, update, applyPalette, cameraAt, setRig, getRig, subjects, obstacles, poses };
 }

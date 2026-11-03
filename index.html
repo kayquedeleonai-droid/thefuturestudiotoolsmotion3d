@@ -71,6 +71,10 @@
   .muted { color: var(--muted); font-size: 12px; margin: 6px 0; }
   .check { font-family: var(--mono); font-size: 11px; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--panel2); }
   .check.ok { color: var(--ok); } .check.bad { color: var(--bad); }
+  .check div + div { margin-top: 4px; } .check button { margin-top: 6px; }
+  .muted.bad { color: var(--bad); } .muted.okc { color: var(--ok); }
+  #moveprompt { margin-top: 6px; font-family: Inter, system-ui, sans-serif; font-size: 12px; }
+  [hidden] { display: none !important; }
   .paste { display: flex; gap: 6px; margin: 6px 0; } .paste input { flex: 1; min-width: 0; }
   .swatches { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
   .swatches span { flex: 1; }
@@ -102,6 +106,7 @@
       <input id="scrub" type="range" min="0" max="1000" value="0">
       <span id="tcode" class="mono">0.00 / 4.0 s</span>
       <span id="fps" class="mono"></span>
+      <button id="btn360" class="chip" style="width:auto;padding:4px 10px">Vista 360°</button>
     </div>
   </section>
   <aside id="rack"></aside>

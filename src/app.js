@@ -11,6 +11,9 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { params as P, config, lightPresets, createScene } from './scene.js';
 import { PRESETS, parseColors, autoRoles, ROLE_LABELS } from './palette.js';
 import { FINISHES, FRAMES, finishAtlas } from './finish.js';
+import { buildRig, camQA } from './camrig.js';
+import { MOVES, promptFor, sanitizeMove } from './moves.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -18,7 +21,8 @@ const h = (tag, attrs = {}, ...kids) => {
   for (const [k, v] of Object.entries(attrs)) {
     if (k === 'class') e.className = v;
     else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
-    else if (v !== undefined && v !== null) e.setAttribute(k, v);
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v);
   }
   for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
   return e;
@@ -30,6 +34,8 @@ const state = {
   palette: { name: PRESETS[9].name, colors: PRESETS[9].colors.slice(), roles: autoRoles(PRESETS[9].colors) },
   finish: { id: 'papel', amount: 0.3, scale: 1.4, blend: 'softlight', boil: 0 },
   previewScale: 0.75,
+  camera: { moveId: 'observador', custom: [] },
+  view360: false,
   playing: true,
   t: 0,
   rendering: false,
@@ -163,12 +169,13 @@ function setRenderSize(w, hgt) {
 
 function renderAt(t) {
   const aspect = curW / curH;
-  const { focus } = S.update(t, aspect);
+  helpers.visible = false;
+  const { focus, dofMul, lens } = S.update(t, aspect);
   renderer.toneMappingExposure = P.exposicao.value;
-  const ap = P.dof.value;
+  const ap = P.dof.value * Math.min(1, Math.max(0, dofMul));
   bokeh.enabled = ap > 0.001;
   bokeh.uniforms.focus.value = focus;
-  bokeh.uniforms.aperture.value = ap * ap * 0.0035 * (P.lente.value / 50);
+  bokeh.uniforms.aperture.value = ap * ap * 0.0035 * (lens / 50) * (S.getRig() ? 2.2 : 1);
   bokeh.uniforms.maxblur.value = 0.004 + ap * 0.012;
   bloom.enabled = P.bloom.value > 0.001;
   bloom.strength = P.bloom.value;
@@ -211,7 +218,8 @@ function tick(now) {
   const T = P.duracao.value;
   if (state.playing) state.t = (state.t + dt) % T;
   if (state.t >= T) state.t = state.t % T;
-  renderAt(state.t);
+  if (state.view360) render360(state.t);
+  else renderAt(state.t);
   fpsAcc += dt; fpsN++;
   if (now - fpsT > 500) {
     $('#fps').textContent = `${Math.round(fpsN / Math.max(fpsAcc, 1e-3))} fps · ${curW}×${curH}`;
@@ -221,27 +229,186 @@ function tick(now) {
   $('#tcode').textContent = `${state.t.toFixed(2)} / ${T.toFixed(1)} s`;
 }
 
-// ------------------------------------------------------------------ verificação de suavidade da câmera
+// ------------------------------------------------------------------ checagem da câmera (camqa ao vivo)
+let lastQA = null;
 function camCheck() {
-  const T = P.duracao.value, N = 480, dt = T / N;
-  const hfov = 2 * Math.atan(18 / P.lente.value) * 180 / Math.PI;
-  let prev = null, prevRoll = 0, maxDeg = 0;
-  for (let i = 0; i <= N; i++) {
-    const c = S.cameraAt(i * dt);
-    const dir = c.look.clone().sub(c.pos).normalize();
-    if (prev) {
-      const a = Math.acos(Math.min(1, Math.max(-1, dir.dot(prev)))) * 180 / Math.PI;
-      const r = Math.abs(c.roll - prevRoll) * 180 / Math.PI;
-      maxDeg = Math.max(maxDeg, Math.hypot(a, r) / dt);
-    }
-    prev = dir; prevRoll = c.roll;
-  }
-  const screen = maxDeg / hfov;
-  const f = Math.max(maxDeg / 35, screen / 0.35);
   const el = $('#camcheck');
-  if (!el) return;
-  if (f <= 1) { el.textContent = `Suavidade ok · pico ${maxDeg.toFixed(1)}°/s · ${screen.toFixed(2)} quadros/s`; el.className = 'check ok'; }
-  else { el.textContent = `Rápido demais — mínimo ${(T * f).toFixed(1)} s (pico ${maxDeg.toFixed(0)}°/s)`; el.className = 'check bad'; }
+  const T = P.duracao.value;
+  const qa = camQA((t) => S.cameraAt(t), T, (t) => S.obstacles(t), {
+    fps: 30,
+    inFrame: (t) => Object.entries(S.subjects).filter(([k]) => k !== 'centro' && k !== 'anel').map(([, s]) => s.at(t)),
+  });
+  lastQA = qa;
+  rebuildPath();
+  if (!el) return qa;
+  el.innerHTML = '';
+  const line = (txt, cls = '') => el.append(h('div', { class: cls }, txt));
+  if (qa.pass) {
+    el.className = 'check ok';
+    line(`Suavidade ok · giro p95 ${qa.p95.toFixed(0)}°/s, pico ${qa.max.toFixed(0)}°/s · ${qa.screen.toFixed(2)} quadros/s · folga ${qa.minClear.toFixed(2)} m`);
+  } else {
+    el.className = 'check bad';
+    if (qa.minDuration) {
+      line(`Rápido demais — mínimo ${(Math.ceil(qa.minDuration * 2) / 2).toFixed(1)} s (pico ${qa.max.toFixed(0)}°/s em ${qa.maxAt.toFixed(1)} s)`);
+      el.append(h('button', { class: 'chip', onclick: () => { P.duracao.value = Math.min(P.duracao.max, Math.ceil(qa.minDuration * 2) / 2); refreshUI(); save(); } }, 'Usar a duração mínima'));
+    }
+    if (!qa.clearOk) line(`Passa perto demais de: ${qa.clearName} (${qa.minClear.toFixed(2)} m em ${qa.clearAt.toFixed(1)} s; mínimo 0,30 m)`);
+    if (qa.emptyFrames) line(`${qa.emptyFrames} quadros sem nenhum elemento em cena`);
+  }
+  return qa;
+}
+
+// ------------------------------------------------------------------ movimentos de câmera
+function allMoves() { return [...MOVES, ...state.camera.custom]; }
+function findMove(id) { return allMoves().find((m) => m.id === id) || MOVES[0]; }
+function applyMove(id, { setDefaults = true } = {}) {
+  const m = findMove(id);
+  const wasRig = !!S.getRig();
+  state.camera.moveId = m.id;
+  if (m.observer) {
+    S.setRig(null);
+    if (setDefaults && wasRig) { P.duracao.value = 4; P.lente.value = DEFAULT_PARAMS.lente; }
+  } else {
+    try {
+      S.setRig(buildRig(m, S.subjects, { duration: () => P.duracao.value, lens: P.lente.value }));
+    } catch (e) { moveStatus(`Movimento inválido: ${e.message}`, 'bad'); S.setRig(null); return; }
+    if (setDefaults) { P.duracao.value = m.duration || P.duracao.value; if (m.lens) P.lente.value = m.lens; }
+  }
+  state.t = 0;
+  refreshUI();
+  renderMoveUI();
+  save();
+}
+function moveStatus(msg, cls = '') { const el = $('#movestatus'); if (el) { el.textContent = msg; el.className = 'muted ' + cls; } }
+
+let sampleFn = null;
+let directCtl = null;
+async function direct() {
+  const ta = $('#moveprompt');
+  const text = ta.value.trim();
+  if (!text) { ta.classList.add('err'); return; }
+  ta.classList.remove('err');
+  if (!sampleFn) { moveStatus('O Claude não está disponível aqui. Abra o app no Claude ou descreva o movimento no chat.', 'bad'); return; }
+  const btn = $('#btnDirect'), stop = $('#btnStop');
+  btn.disabled = true; stop.hidden = false;
+  directCtl = new AbortController();
+  moveStatus('Pensando no movimento…');
+  const ask = async (extra) => sampleFn.json(promptFor(text, S.subjects, { duration: P.duracao.value, lens: P.lente.value }) + (extra || ''), { signal: directCtl.signal, cache: false });
+  try {
+    let mv = sanitizeMove(await ask(), S.subjects);
+    let rig = buildRig(mv, S.subjects, { duration: () => mv.duration });
+    const qaOf = (r, T) => camQA((t) => { const f = r.frame(t); f.lens = f.lens || mv.lens; return f; }, T, (t) => S.obstacles(t), { fps: 30 });
+    let qa = qaOf(rig, mv.duration);
+    if (!qa.clearOk) {
+      // uma rodada de correção com o relatório da checagem
+      moveStatus(`Ajustando: a câmera passava a ${qa.minClear.toFixed(2)} m de ${qa.clearName}…`);
+      const fix = `\n\nSUA VERSÃO ANTERIOR:\n${JSON.stringify(mv)}\nFALHOU NA CHECAGEM: a câmera passa a ${qa.minClear.toFixed(2)} m de "${qa.clearName}" em t=${qa.clearAt.toFixed(1)} s (mínimo 0,3 m). Afaste os pontos desse trecho (mais "dist" ou outro "az") e responda o JSON corrigido completo.`;
+      mv = sanitizeMove(await ask(fix), S.subjects);
+      rig = buildRig(mv, S.subjects, { duration: () => mv.duration });
+      qa = qaOf(rig, mv.duration);
+    }
+    if (qa.minDuration && qa.minDuration > mv.duration) mv.duration = Math.min(40, Math.ceil(qa.minDuration * 2) / 2);
+    mv.prompt = text;
+    state.camera.custom.push(mv);
+    applyMove(mv.id);
+    renderMoveUI();
+    const q2 = lastQA;
+    moveStatus(`Pronto: “${mv.name}” · ${mv.duration} s · ${mv.keys.length} pontos${q2 && q2.pass ? ' · checagem ok' : ' · veja os avisos da checagem'}`, q2 && q2.pass ? 'okc' : 'bad');
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'cancelled') moveStatus('Cancelado.');
+    else if (code === 'not_granted' || code === 'sampling_disabled') { moveStatus('Sem permissão para usar o Claude nesta página.', 'bad'); }
+    else if (code === 'rate_limited') moveStatus('Muitas chamadas agora. Tente de novo em instantes.', 'bad');
+    else if (code === 'invalid_json') moveStatus('A resposta veio fora do formato. Clique em Dirigir de novo.', 'bad');
+    else moveStatus(`Não deu certo: ${(e && (e.message || e.code)) || e}`, 'bad');
+  } finally {
+    btn.disabled = false; stop.hidden = true; directCtl = null;
+  }
+}
+
+const moveBox = h('div');
+function renderMoveUI() {
+  moveBox.innerHTML = '';
+  const m = findMove(state.camera.moveId);
+  const sel = h('select', { onchange: (e) => applyMove(e.target.value) },
+    ...allMoves().map((mv) => h('option', { value: mv.id }, (mv.custom ? '✦ ' : '') + mv.name)));
+  sel.value = m.id;
+  const ta = h('textarea', { id: 'moveprompt', rows: 3, placeholder: 'Ex.: mergulha até a cápsula, passa rente ao cubo, contorna o cromo por trás e abre no final mostrando tudo' });
+  const directRow = h('div', { class: 'btns' },
+    h('button', { class: 'primary', id: 'btnDirect', onclick: direct }, 'Dirigir câmera'),
+    h('button', { id: 'btnStop', hidden: true, onclick: () => directCtl && directCtl.abort() }, 'Parar'));
+  const promptWrap = h('div', { id: 'promptwrap', hidden: !sampleFn }, h('div', { class: 'sub' }, 'Dirigir por prompt'), ta, directRow);
+  const noPrompt = h('div', { class: 'muted', id: 'noprompt', hidden: !!sampleFn },
+    'Para dirigir por texto aqui, abra o app no Claude. Ou descreva o movimento no chat: o Claude escreve o caminho, confere a suavidade e adiciona aos movimentos salvos.');
+  const tools = h('div', { class: 'btns' },
+    h('button', { onclick: (e) => copyText(JSON.stringify(m.observer ? { id: m.id } : m, null, 1), e.target, 'Copiar JSON') }, 'Copiar JSON'),
+    h('button', {
+      onclick: () => showPaste('', (txt) => {
+        const mv = sanitizeMove(JSON.parse(txt), S.subjects);
+        state.camera.custom.push(mv); applyMove(mv.id); renderMoveUI();
+      }),
+    }, 'Colar JSON'),
+    m.custom ? h('button', {
+      onclick: () => { state.camera.custom = state.camera.custom.filter((x) => x.id !== m.id); applyMove('observador'); renderMoveUI(); },
+    }, 'Excluir este') : null);
+  moveBox.append(
+    h('div', { class: 'row' }, h('span', { class: 'lbl' }, 'Movimento'), sel),
+    h('div', { class: 'muted' }, m.prompt ? `“${m.prompt}”` : (m.note || '')),
+    promptWrap, noPrompt, h('div', { id: 'movestatus', class: 'muted' }), tools);
+}
+async function copyText(txt, btn, label) {
+  try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copiado ✓'; setTimeout(() => { btn.textContent = label; }, 1500); }
+  catch (_) { showPaste(txt); }
+}
+
+// ------------------------------------------------------------------ vista 360° (só olhar; caminho em azul, câmera em vermelho)
+const helpers = new THREE.Group();
+helpers.visible = false;
+S.scene.add(helpers);
+const pathLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x3d8bff, depthTest: false, transparent: true }));
+pathLine.renderOrder = 10;
+const camCone = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.6, 24), new THREE.MeshBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true, opacity: 0.9 }));
+camCone.geometry.rotateX(-Math.PI / 2); // aponta para -z (para onde a câmera olha)
+camCone.renderOrder = 11;
+const ctrlDots = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x3d8bff, size: 7, sizeAttenuation: false, depthTest: false }));
+helpers.add(pathLine, camCone, ctrlDots);
+const orbitCam = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 400);
+orbitCam.position.set(9, 11, 16);
+let orbit = null;
+function rebuildPath() {
+  const T = P.duracao.value, n = 300;
+  const pts = [];
+  for (let i = 0; i <= n; i++) pts.push(S.cameraAt((i / n) * T).pos);
+  pathLine.geometry.dispose();
+  pathLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+  const rig = S.getRig();
+  ctrlDots.geometry.dispose();
+  ctrlDots.geometry = new THREE.BufferGeometry().setFromPoints(rig ? rig.controls : []);
+}
+function render360(t) {
+  const aspect = curW / curH;
+  S.update(t, aspect);
+  helpers.visible = true;
+  camCone.position.copy(S.camera.position);
+  camCone.quaternion.copy(S.camera.quaternion);
+  orbitCam.aspect = aspect;
+  orbitCam.updateProjectionMatrix();
+  if (orbit) orbit.update();
+  renderer.toneMappingExposure = P.exposicao.value;
+  renderer.setRenderTarget(null);
+  renderer.render(S.scene, orbitCam);
+  helpers.visible = false;
+}
+function toggle360() {
+  state.view360 = !state.view360;
+  if (state.view360 && !orbit) {
+    orbit = new OrbitControls(orbitCam, canvas);
+    orbit.target.set(0, 1.2, 0);
+    orbit.enableDamping = true;
+  }
+  if (orbit) orbit.enabled = state.view360;
+  $('#btn360').classList.toggle('on', state.view360);
+  $('#btn360').textContent = state.view360 ? 'Vista da câmera' : 'Vista 360°';
 }
 
 // ------------------------------------------------------------------ ajustes (salvar / copiar / colar)
@@ -251,6 +418,7 @@ function getSettings() {
     params: Object.fromEntries(Object.entries(P).map(([k, v]) => [k, v.value])),
     palette: state.palette,
     finish: state.finish,
+    camera: state.camera,
   };
 }
 function applySettings(s) {
@@ -261,13 +429,20 @@ function applySettings(s) {
     S.applyPalette(state.palette.roles);
   }
   if (s.finish) { state.finish = { ...DEFAULT_FINISH, ...s.finish }; setFinishTexture(); }
+  if (s.camera) {
+    state.camera = { moveId: s.camera.moveId || 'observador', custom: Array.isArray(s.camera.custom) ? s.camera.custom : [] };
+    applyMove(state.camera.moveId, { setDefaults: false });
+    renderMoveUI();
+  }
   refreshUI();
 }
 let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { try { localStorage.setItem(STORE, JSON.stringify(getSettings())); } catch (e) { /* sem storage */ } }, 250);
-  camCheck();
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE, JSON.stringify(getSettings())); } catch (e) { /* sem storage */ }
+    camCheck();
+  }, 250);
 }
 
 // ------------------------------------------------------------------ UI
@@ -297,7 +472,6 @@ function refreshUI() {
   for (const [k, s] of Object.entries(sliders)) { s.inp.value = P[k].value; s.fmt(); }
   renderPaletteUI();
   renderFinishUI();
-  camCheck();
 }
 
 // --- cores
@@ -610,11 +784,12 @@ function buildSettingsUI() {
         for (const k of Object.keys(P)) P[k].value = DEFAULT_PARAMS[k];
         state.palette = { name: PRESETS[9].name, colors: PRESETS[9].colors.slice(), roles: autoRoles(PRESETS[9].colors) };
         state.finish = { ...DEFAULT_FINISH };
+        state.camera.moveId = 'observador'; S.setRig(null); renderMoveUI();
         S.applyPalette(state.palette.roles); setFinishTexture(); refreshUI(); save();
       },
     }, 'Voltar ao padrão'));
 }
-function showPaste(prefill) {
+function showPaste(prefill, onOk) {
   const m = $('#modal');
   const ta = h('textarea', { rows: 8, placeholder: 'Cole aqui os ajustes copiados' });
   ta.value = prefill;
@@ -622,7 +797,7 @@ function showPaste(prefill) {
   $('#modalBody').append(h('p', {}, prefill ? 'Copie o texto abaixo:' : 'Cole os ajustes e clique OK:'), ta);
   $('#modalOk').onclick = () => {
     if (!prefill) {
-      try { applySettings(JSON.parse(ta.value)); save(); } catch (_) { ta.classList.add('err'); return; }
+      try { if (onOk) onOk(ta.value); else applySettings(JSON.parse(ta.value)); save(); } catch (_) { ta.classList.add('err'); return; }
     }
     m.hidden = true;
   };
@@ -641,8 +816,9 @@ function buildRack() {
   }, name)));
   rack.append(
     panel('Movimento', true, ...keysOf('motion').map(slider)),
-    panel('Câmera', true, h('div', { class: 'muted' }, 'Observador flutuante: arco lateral suave + flutuação viva. A distância acompanha a lente, então o enquadramento fica parado.'),
-      ...keysOf('camera').map(slider), h('div', { class: 'sub' }, 'Lentes (mm)'), lensBtns, h('div', { id: 'camcheck', class: 'check' })),
+    panel('Câmera', true, moveBox, h('div', { id: 'camcheck', class: 'check' }),
+      h('div', { class: 'sub' }, 'Ajustes'), ...keysOf('camera').map(slider), h('div', { class: 'sub' }, 'Lentes (mm)'), lensBtns,
+      h('div', { class: 'muted' }, 'No observador flutuante a distância acompanha a lente, então o enquadramento fica parado. Arco e altura valem só para ele; nos movimentos, a duração define a velocidade.')),
     panel('Luz', true, h('div', { class: 'sub' }, 'Presets'), lightBtns, ...keysOf('light').map(slider)),
     panel('Cores', true, paletteBox),
     panel('Acabamento (textura sobre o quadro)', false, finishBox),
@@ -680,16 +856,29 @@ function buildTransport() {
     if (saved && saved.params) for (const [k, v] of Object.entries(saved.params)) if (P[k] && typeof v === 'number') P[k].value = v;
     if (saved && saved.palette && saved.palette.roles) state.palette = saved.palette;
     if (saved && saved.finish) state.finish = { ...DEFAULT_FINISH, ...saved.finish };
+    if (saved && saved.camera) state.camera = { moveId: saved.camera.moveId || 'observador', custom: Array.isArray(saved.camera.custom) ? saved.camera.custom : [] };
   } catch (e) { /* sem storage */ }
   S.applyPalette(state.palette.roles);
   setFinishTexture();
   buildRenderUI();
+  applyMove(state.camera.moveId, { setDefaults: false });
+  renderMoveUI();
   buildRack();
   buildTransport();
+  $('#btn360').onclick = toggle360;
   refreshUI();
+  camCheck();
   estimate();
   fitPreview();
   $('#loading').hidden = true;
   requestAnimationFrame(tick);
-  window.__motion = { renderAt, setRenderSize, P, state, S, R, renderMP4, getSettings, applySettings, config };
+  (async () => {
+    try {
+      if (window.claude && typeof window.claude.use === 'function') {
+        sampleFn = await window.claude.use('sample');
+        if (sampleFn) { $('#promptwrap') && ($('#promptwrap').hidden = false); $('#noprompt') && ($('#noprompt').hidden = true); }
+      }
+    } catch (e) { sampleFn = null; }
+  })();
+  window.__motion = { renderAt, setRenderSize, P, state, S, R, renderMP4, getSettings, applySettings, config, applyMove, camCheck, buildRig, camQA, MOVES, toggle360, render360, sanitizeMove };
 })();
