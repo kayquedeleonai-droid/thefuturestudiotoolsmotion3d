@@ -1,5 +1,7 @@
 # Motion 3D · The Future
 
+Online: **https://motion3d.thefuturestudiostools.app** · repositório: `kayquedeleonai-droid/thefuturestudiotoolsmotion3d`
+
 Prévia interativa de motion 3D (Three.js + WebGL) com sliders e render MP4 **na GPU de quem abre a página**.
 Baseado na skill *Motion 3D do Jonaum — BETA V1*.
 
@@ -18,8 +20,6 @@ a prévia e o render MP4 rodam na GPU de quem abre a página.
 velho nos scripts). Com o repositório conectado em *Workers & Pages → Create → Import a repository*, cada push na
 `main` publica sozinho. Deploy manual: `npx wrangler@latest deploy`.
 
-- **GitHub Pages**: em *Settings → Pages*, escolha a branch `main` e a pasta `/ (root)`. O app abre em
-  `https://kayque-thefuture.github.io/thefuture-motiontool/`.
 - **Local**: o WebCodecs (render MP4) exige contexto seguro, então abra por `localhost`:
   ```bash
   npx serve .            # ou: python3 -m http.server 8080
