@@ -24,7 +24,9 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 Inter, system-ui, sans-serif; }
-  header.top { display: flex; align-items: baseline; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  header.top { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+  header.top .logo { height: 32px; width: auto; display: block; }
+  header.top .sep { width: 1px; height: 22px; background: var(--line); }
   header.top h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .02em; }
   header.top span { color: var(--muted); font-size: 12px; }
   .app { display: grid; grid-template-columns: minmax(0, 1fr); }
@@ -40,9 +42,9 @@
   #rack { padding: 14px 18px 60px; columns: 340px; column-gap: 14px; }
   @media (min-width: 1280px) {
     .app { grid-template-columns: minmax(0, 1.35fr) minmax(380px, 1fr); }
-    .stage { height: calc(100vh - 45px); border-bottom: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
+    .stage { height: calc(100vh - 53px); border-bottom: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
     #viewWrap, .transport { max-width: none; }
-    #rack { height: calc(100vh - 45px); overflow: auto; columns: auto; }
+    #rack { height: calc(100vh - 53px); overflow: auto; columns: auto; }
   }
   .panel { break-inside: avoid; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; }
   .panel > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; list-style: none; }
@@ -93,7 +95,7 @@
 </style>
 </head>
 <body>
-<header class="top"><h1>Motion 3D</h1><span>prévia ao vivo · render na sua GPU</span></header>
+<header class="top"><img class="logo" src="./assets/logo.png" alt="The Future Studios" width="62" height="32"><i class="sep"></i><h1>Motion 3D</h1><span>prévia ao vivo · render na sua GPU</span></header>
 <div class="app">
   <section class="stage">
     <div id="viewWrap">
