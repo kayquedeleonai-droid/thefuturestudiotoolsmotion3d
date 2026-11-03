@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion 3D · The Future</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "mp4-muxer": "https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.mjs"
+  }
+}
+</script>
+<style>
+  :root {
+    --bg: #0e0f11; --panel: #16181b; --panel2: #1c1f23; --line: #2a2e34; --text: #e9e7e2; --muted: #8b9098;
+    --accent: #ff7a45; --ok: #5bd18b; --bad: #ff6b6b;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 Inter, system-ui, sans-serif; }
+  header.top { display: flex; align-items: baseline; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  header.top h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  header.top span { color: var(--muted); font-size: 12px; }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .stage { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 18px 10px; border-bottom: 1px solid var(--line); }
+  #viewWrap { position: relative; width: 100%; max-width: calc(52vh * 16 / 9); margin: 0 auto; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,.45); }
+  #view { width: 100%; height: 100%; display: block; }
+  #loading, #busy { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-family: var(--mono); font-size: 12px; background: rgba(14,15,17,.65); }
+  #loading[hidden], #busy[hidden] { display: none; }
+  .transport { display: flex; align-items: center; gap: 10px; width: 100%; max-width: calc(52vh * 16 / 9); margin: 8px auto 0; }
+  .transport button { width: 34px; height: 28px; padding: 0; }
+  #scrub { flex: 1; }
+  .mono { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+  #rack { padding: 14px 18px 60px; columns: 340px; column-gap: 14px; }
+  @media (min-width: 1280px) {
+    .app { grid-template-columns: minmax(0, 1.35fr) minmax(380px, 1fr); }
+    .stage { height: calc(100vh - 45px); border-bottom: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
+    #viewWrap, .transport { max-width: none; }
+    #rack { height: calc(100vh - 45px); overflow: auto; columns: auto; }
+  }
+  .panel { break-inside: avoid; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; }
+  .panel > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; list-style: none; }
+  .panel > summary::before { content: '▸'; display: inline-block; width: 14px; color: var(--muted); transition: transform .15s; }
+  .panel[open] > summary::before { transform: rotate(90deg); }
+  .panel .body { padding: 2px 12px 12px; }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; margin: 7px 0; }
+  .row .lbl { color: #c9c7c2; }
+  .row .val { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; }
+  .row input[type=range] { grid-column: 1 / -1; }
+  .row select { justify-self: end; }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 18px; margin: 0; }
+  select, input[type=text], textarea, button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; padding: 6px 9px;
+  }
+  textarea { width: 100%; font-family: var(--mono); font-size: 11px; }
+  button { cursor: pointer; }
+  button:hover { border-color: #444a52; }
+  button.primary { background: var(--accent); color: #1a0d06; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .err { border-color: var(--bad) !important; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+  .chip { padding: 4px 9px; font-size: 12px; border-radius: 999px; }
+  .chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .sub { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-top: 10px; }
+  .muted { color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .check { font-family: var(--mono); font-size: 11px; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--panel2); }
+  .check.ok { color: var(--ok); } .check.bad { color: var(--bad); }
+  .paste { display: flex; gap: 6px; margin: 6px 0; } .paste input { flex: 1; min-width: 0; }
+  .swatches { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  .swatches span { flex: 1; }
+  .roles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .role { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .role input { width: 34px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: none; }
+  .link { color: var(--accent); font-size: 12px; display: inline-block; margin-top: 8px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+  .progress { position: relative; height: 22px; background: var(--panel2); border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  .progress[hidden] { display: none; }
+  .progress .bar { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, #ff7a45, #ffb36b); opacity: .35; }
+  .progress span { position: relative; font-family: var(--mono); font-size: 11px; padding: 0 8px; line-height: 22px; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 50; }
+  #modal[hidden] { display: none; }
+  #modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; width: min(520px, 92vw); }
+</style>
+</head>
+<body>
+<header class="top"><h1>Motion 3D</h1><span>prévia ao vivo · render na sua GPU</span></header>
+<div class="app">
+  <section class="stage">
+    <div id="viewWrap">
+      <canvas id="view"></canvas>
+      <div id="loading">carregando a cena…</div>
+      <div id="busy" hidden>gerando textura…</div>
+    </div>
+    <div class="transport">
+      <button id="play" title="Play / pausa (espaço)">❚❚</button>
+      <input id="scrub" type="range" min="0" max="1000" value="0">
+      <span id="tcode" class="mono">0.00 / 4.0 s</span>
+      <span id="fps" class="mono"></span>
+    </div>
+  </section>
+  <aside id="rack"></aside>
+</div>
+<div id="modal" hidden><div class="box"><div id="modalBody"></div><div class="btns"><button id="modalOk" class="primary">OK</button></div></div></div>
+<script type="module" src="./src/app.js"></script>
+</body>
+</html>
